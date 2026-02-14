@@ -24,7 +24,7 @@ env:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════
-  # JOB 1: Install lechange + detect all change types
+  # JOB 1: Install lechange + detect all change types + build matrix
   # ═══════════════════════════════════════════════════════════════════
   detect-changes:
     name: "Detect Changes"
@@ -85,7 +85,6 @@ jobs:
 
           repo = os.environ["GITHUB_WORKSPACE"]
 
-          # Determine SHAs
           base = "${{ inputs.base_sha }}" or ""
           head = "${{ inputs.head_sha }}" or ""
 
@@ -140,9 +139,8 @@ jobs:
           if result.renamed_files_count:
               print(f"\nRenamed files:")
               for old, new in result.renamed_files_mapping.items():
-                  print(f"  R {old} → {new}")
+                  print(f"  R {old} -> {new}")
 
-          # Write outputs
           gh = os.environ["GITHUB_OUTPUT"]
           with open(gh, "a") as f:
               f.write(f"added={result.added_files_count}\n")
@@ -157,7 +155,7 @@ jobs:
         id: matrix
         run: |
           python - <<'PYEOF'
-          import json, os, subprocess
+          import json, os, subprocess, textwrap
 
           repo = os.environ["GITHUB_WORKSPACE"]
           base = "${{ inputs.base_sha }}" or ""
@@ -182,7 +180,7 @@ jobs:
 
           from lechange import ChangeDetector, Config, load_yaml_patterns
 
-          YAML_GROUPS = """
+          YAML_GROUPS = textwrap.dedent("""\
           frontend:
             - "src/components/**"
             - "src/pages/**"
@@ -198,7 +196,7 @@ jobs:
             - "package.json"
           tests:
             - "tests/**"
-          """
+          """)
 
           detector = ChangeDetector(repo)
           config = Config(base_sha=base, sha=head, files_yaml=YAML_GROUPS)
@@ -216,7 +214,7 @@ jobs:
                       "files": " ".join(matched),
                       "count": len(matched),
                   })
-                  print(f"Group [{grp['name']}]: {len(matched)} files — {matched}")
+                  print(f"Group [{grp['name']}]: {len(matched)} files -> {matched}")
               else:
                   print(f"Group [{grp['name']}]: SKIP (no matching changes)")
 
@@ -248,13 +246,12 @@ jobs:
 
       - name: "Run tests for ${{ matrix.group }}"
         run: |
-          echo "════════════════════════════════════════════════"
+          echo "========================================================"
           echo "  Testing group: ${{ matrix.group }}"
           echo "  Files changed: ${{ matrix.count }}"
           echo "  File list: ${{ matrix.files }}"
-          echo "════════════════════════════════════════════════"
+          echo "========================================================"
 
-          # Simulate group-specific test commands
           case "${{ matrix.group }}" in
             frontend)
               echo "Running: npx jest --testPathPattern='components|pages'"
@@ -358,7 +355,6 @@ jobs:
 
           detector = ChangeDetector(repo)
 
-          # Config WITH workflow tracking
           config = Config(
               base_sha=base,
               sha=head,
@@ -403,14 +399,13 @@ jobs:
           print(f"\n  Failed jobs: {list(result.failed_jobs)}")
           print(f"  Successful jobs: {list(result.successful_jobs)}")
 
-          # Verify invariant
           rebuild_set = set(rebuild)
           skip_set = set(skip)
           overlap = rebuild_set & skip_set
           if overlap:
-              print(f"\n  WARNING: rebuild ∩ skip overlap: {overlap}")
+              print(f"\n  WARNING: rebuild / skip overlap: {overlap}")
           else:
-              print(f"\n  Disjoint invariant: rebuild ∩ skip = ∅  ✓")
+              print(f"\n  Disjoint invariant: rebuild ^ skip = empty set  OK")
 
           print(f"\n  Diagnostics:")
           for d in result.diagnostics:
@@ -432,9 +427,9 @@ jobs:
     steps:
       - name: Report
         run: |
-          echo "═══════════════════════════════════════════════════"
-          echo "  LeChange Showcase — Final Report"
-          echo "═══════════════════════════════════════════════════"
+          echo "==================================================="
+          echo "  LeChange Showcase - Final Report"
+          echo "==================================================="
           echo ""
           echo "  Change Detection:"
           echo "    Total files changed: ${{ needs.detect-changes.outputs.total }}"
@@ -448,4 +443,4 @@ jobs:
           echo "  Smart Rebuild: ${{ needs.smart-rebuild.result }}"
           echo ""
           echo "  Overall: ${{ needs.test-group.result == 'success' && 'PASSED' || needs.test-group.result }}"
-          echo "═══════════════════════════════════════════════════"
+          echo "==================================================="
