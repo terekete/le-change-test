@@ -62,7 +62,12 @@ jobs:
       - name: Build & install lechange from source
         run: |
           pip install maturin
-          git clone --depth 1 --branch ${{ env.LECHANGE_REF }} ${{ env.LECHANGE_REPO }} /tmp/le-change
+          if [ -d /tmp/le-change/.git ]; then
+            cd /tmp/le-change && git fetch origin ${{ env.LECHANGE_REF }} && git checkout FETCH_HEAD
+          else
+            rm -rf /tmp/le-change
+            git clone --depth 1 --branch ${{ env.LECHANGE_REF }} ${{ env.LECHANGE_REPO }} /tmp/le-change
+          fi
           cd /tmp/le-change
           maturin build --release --out dist
           pip install dist/*.whl
@@ -321,7 +326,12 @@ jobs:
       - name: Build & install lechange from source
         run: |
           pip install maturin
-          git clone --depth 1 --branch ${{ env.LECHANGE_REF }} ${{ env.LECHANGE_REPO }} /tmp/le-change
+          if [ -d /tmp/le-change/.git ]; then
+            cd /tmp/le-change && git fetch origin ${{ env.LECHANGE_REF }} && git checkout FETCH_HEAD
+          else
+            rm -rf /tmp/le-change
+            git clone --depth 1 --branch ${{ env.LECHANGE_REF }} ${{ env.LECHANGE_REPO }} /tmp/le-change
+          fi
           cd /tmp/le-change
           maturin build --release --out dist
           pip install dist/*.whl
