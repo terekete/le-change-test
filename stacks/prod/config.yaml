@@ -15,7 +15,7 @@ database:
   instance_class: db.r6g.xlarge
   storage_gb: 500
   multi_az: true
-  backup_retention_days: 30
+  backup_retention_days: 60
 
 networking:
   vpc_cidr: "10.2.0.0/16"

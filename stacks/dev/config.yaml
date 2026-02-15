@@ -26,6 +26,9 @@ networking:
     - "10.0.10.0/24"
     - "10.0.11.0/24"
 
+feature_flags:
+  canary: true
+
 monitoring:
   log_level: debug
   metrics_interval: 30

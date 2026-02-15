@@ -129,15 +129,28 @@ jobs:
           rebuild_files = set(result.files_to_rebuild)
           skip_files = set(result.files_to_skip)
 
+          # Build rebuild reason lookup
+          reasons_map = {}
+          for r in result.rebuild_reasons:
+              reasons_map[r['file']] = r['kind']
+
           print(f"\n{'=' * 60}")
           print(f"  STACKS DEPLOYMENT ANALYSIS")
           print(f"{'=' * 60}")
-          print(f"\n  Changed files: {all_changed}")
-          print(f"  Changed stacks: {changed_keys}")
+          print(f"\n  All detected files: {all_changed}")
+          print(f"  Changed stacks (YAML keys): {changed_keys}")
           print(f"  Files to rebuild: {list(rebuild_files)}")
           print(f"  Files to skip: {list(skip_files)}")
 
-          # Build matrix: only include stacks that have files to rebuild
+          if result.rebuild_reasons:
+              print(f"\n  Rebuild reasons:")
+              for r in result.rebuild_reasons:
+                  reason = r['kind']
+                  if r.get('failed_job_name'):
+                      reason += f" (job: {r['failed_job_name']})"
+                  print(f"    {r['file']}: {reason}")
+
+          # Build matrix: include stacks with current changes OR previous failures
           groups = load_yaml_patterns(STACKS_YAML)
           matrix_includes = []
 
@@ -158,25 +171,27 @@ jobs:
                   print(f"\n  Stack [{name}]: SKIP (previously successful)")
                   for f in matched:
                       print(f"    ~ {f}")
-              elif needs_deploy or not skip_files:
-                  matrix_includes.append({
-                      "stack": name,
-                      "files": " ".join(matched),
-                      "count": len(matched),
-                  })
-                  print(f"\n  Stack [{name}]: DEPLOY ({len(matched)} file(s))")
-                  for f in matched:
-                      marker = "!" if f in rebuild_files else "+"
-                      print(f"    {marker} {f}")
               else:
+                  # Determine deploy reason
+                  has_new = any(reasons_map.get(f) == "new_change" for f in matched)
+                  has_failure = any(reasons_map.get(f) in ("previous_failure", "both_new_and_failed") for f in matched)
+                  if has_new and has_failure:
+                      reason_tag = "new change + previous failure"
+                  elif has_failure:
+                      reason_tag = "previous failure"
+                  else:
+                      reason_tag = "new change"
+
                   matrix_includes.append({
                       "stack": name,
                       "files": " ".join(matched),
                       "count": len(matched),
                   })
-                  print(f"\n  Stack [{name}]: DEPLOY ({len(matched)} file(s))")
+                  print(f"\n  Stack [{name}]: DEPLOY ({reason_tag})")
                   for f in matched:
-                      print(f"    + {f}")
+                      kind = reasons_map.get(f, "new_change")
+                      marker = "!" if "failure" in kind else "+"
+                      print(f"    {marker} {f}  [{kind}]")
 
           # Build matrix JSON
           matrix = json.dumps({"include": matrix_includes}) if matrix_includes else '{"include":[]}'
@@ -244,6 +259,14 @@ jobs:
           echo "========================================================"
           echo "  Deploying stack: ${{ matrix.stack }}"
           echo "========================================================"
+
+          # Hardcoded prod failure for workflow failure tracking test
+          if [ "${{ matrix.stack }}" = "prod" ]; then
+            echo ""
+            echo "  DEPLOY FAILED: prod deployment error (simulated)"
+            echo "========================================================"
+            exit 1
+          fi
 
           # Simulate deployment steps
           echo "  [1/4] Loading config from stacks/${{ matrix.stack }}/config.yaml..."
