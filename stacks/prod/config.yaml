@@ -1,0 +1,34 @@
+environment: prod
+region: us-east-1
+
+compute:
+  instance_type: m6i.xlarge
+  min_replicas: 3
+  max_replicas: 10
+  autoscaling:
+    cpu_threshold: 60
+    memory_threshold: 70
+
+database:
+  engine: postgres
+  version: "15.4"
+  instance_class: db.r6g.xlarge
+  storage_gb: 500
+  multi_az: true
+  backup_retention_days: 30
+
+networking:
+  vpc_cidr: "10.2.0.0/16"
+  public_subnets:
+    - "10.2.1.0/24"
+    - "10.2.2.0/24"
+    - "10.2.3.0/24"
+  private_subnets:
+    - "10.2.10.0/24"
+    - "10.2.11.0/24"
+    - "10.2.12.0/24"
+
+monitoring:
+  log_level: warn
+  metrics_interval: 60
+  alerts_enabled: true
