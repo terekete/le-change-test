@@ -4,7 +4,7 @@ region: us-east-1
 compute:
   instance_type: m6i.xlarge
   min_replicas: 3
-  max_replicas: 10
+  max_replicas: 15
   autoscaling:
     cpu_threshold: 60
     memory_threshold: 70
