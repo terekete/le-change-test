@@ -4,7 +4,7 @@ region: us-east-1
 compute:
   instance_type: t3.large
   min_replicas: 2
-  max_replicas: 5
+  max_replicas: 7
   autoscaling:
     cpu_threshold: 65
     memory_threshold: 75
