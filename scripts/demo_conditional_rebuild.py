@@ -138,7 +138,7 @@ def main():
             sha=branch_head,
             token=token,
             track_workflow_failures=True,
-            track_job_level=True,
+            failure_tracking_level="job",
             wait_for_active_workflows=False,
             workflow_max_wait_seconds=15,
             skip_successful_files=True,

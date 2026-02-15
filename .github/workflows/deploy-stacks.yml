@@ -114,6 +114,7 @@ jobs:
               files_yaml=STACKS_YAML,
               token=token,
               track_workflow_failures=True,
+              failure_tracking_level="job",
               workflow_lookback_commits=5,
               wait_for_active_workflows=False,
               workflow_max_wait_seconds=15,
