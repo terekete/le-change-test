@@ -31,5 +31,5 @@ feature_flags:
 
 monitoring:
   log_level: debug
-  metrics_interval: 30
+  metrics_interval: 15
   alerts_enabled: false

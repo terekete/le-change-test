@@ -260,14 +260,6 @@ jobs:
           echo "  Deploying stack: ${{ matrix.stack }}"
           echo "========================================================"
 
-          # Hardcoded prod failure for workflow failure tracking test
-          if [ "${{ matrix.stack }}" = "prod" ]; then
-            echo ""
-            echo "  DEPLOY FAILED: prod deployment error (simulated)"
-            echo "========================================================"
-            exit 1
-          fi
-
           # Simulate deployment steps
           echo "  [1/4] Loading config from stacks/${{ matrix.stack }}/config.yaml..."
           sleep 1
