@@ -68,7 +68,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python - <<'PYEOF'
-          import json, os, subprocess
+          import os, subprocess
 
           repo = os.environ["GITHUB_WORKSPACE"]
           token = os.environ.get("GITHUB_TOKEN", "")
@@ -92,7 +92,7 @@ jobs:
           print(f"Base: {base[:12]}")
           print(f"Head: {head[:12]}")
 
-          from lechange import ChangeDetector, Config, load_yaml_patterns
+          from lechange import ChangeDetector, Config
 
           # Define YAML groups: one per stack folder
           STACKS_YAML = """\
@@ -124,24 +124,13 @@ jobs:
           )
           result = detector.get_changed_files(config)
 
-          # Get changed stacks from YAML group keys
-          changed_keys = list(result.changed_keys)
-          all_changed = list(result.all_changed_files)
-          rebuild_files = set(result.files_to_rebuild)
-          skip_files = set(result.files_to_skip)
-
-          # Build rebuild reason lookup
-          reasons_map = {}
-          for r in result.rebuild_reasons:
-              reasons_map[r['file']] = r['kind']
-
           print(f"\n{'=' * 60}")
           print(f"  STACKS DEPLOYMENT ANALYSIS")
           print(f"{'=' * 60}")
-          print(f"\n  All detected files: {all_changed}")
-          print(f"  Changed stacks (YAML keys): {changed_keys}")
-          print(f"  Files to rebuild: {list(rebuild_files)}")
-          print(f"  Files to skip: {list(skip_files)}")
+          print(f"\n  All detected files: {list(result.all_changed_files)}")
+          print(f"  Changed stacks (YAML keys): {list(result.changed_keys)}")
+          print(f"  Files to rebuild: {list(result.files_to_rebuild)}")
+          print(f"  Files to skip: {list(result.files_to_skip)}")
 
           if result.rebuild_reasons:
               print(f"\n  Rebuild reasons:")
@@ -151,55 +140,26 @@ jobs:
                       reason += f" (job: {r['failed_job_name']})"
                   print(f"    {r['file']}: {reason}")
 
-          # Build matrix: include stacks with current changes OR previous failures
-          groups = load_yaml_patterns(STACKS_YAML)
-          matrix_includes = []
+          # Deploy decisions computed by le-change core
+          for d in result.deploy_decisions:
+              action = d['action'].upper()
+              reason = d.get('reason', '')
+              reason_tag = {
+                  'new_change': 'new change',
+                  'previous_failure': 'previous failure',
+                  'both_new_and_failed': 'new change + previous failure',
+              }.get(reason or '', '')
+              suffix = f" ({reason_tag})" if reason_tag else ""
+              print(f"\n  Stack [{d['key']}]: {action}{suffix}")
+              for f in d['files']:
+                  print(f"    + {f}")
 
-          for grp in groups:
-              name = grp["name"]
-              matcher = grp["matcher"]
-              matched = matcher.filter(all_changed)
+          # Matrix JSON and has_changes computed by le-change core
+          matrix = result.deploy_matrix
+          has_changes = "true" if result.has_deployable_groups else "false"
 
-              if not matched:
-                  print(f"\n  Stack [{name}]: SKIP (no changed files)")
-                  continue
-
-              # Check if any matched files need rebuilding
-              needs_deploy = any(f in rebuild_files for f in matched)
-              all_skippable = all(f in skip_files for f in matched)
-
-              if all_skippable:
-                  print(f"\n  Stack [{name}]: SKIP (previously successful)")
-                  for f in matched:
-                      print(f"    ~ {f}")
-              else:
-                  # Determine deploy reason
-                  has_new = any(reasons_map.get(f) == "new_change" for f in matched)
-                  has_failure = any(reasons_map.get(f) in ("previous_failure", "both_new_and_failed") for f in matched)
-                  if has_new and has_failure:
-                      reason_tag = "new change + previous failure"
-                  elif has_failure:
-                      reason_tag = "previous failure"
-                  else:
-                      reason_tag = "new change"
-
-                  matrix_includes.append({
-                      "stack": name,
-                      "files": " ".join(matched),
-                      "count": len(matched),
-                  })
-                  print(f"\n  Stack [{name}]: DEPLOY ({reason_tag})")
-                  for f in matched:
-                      kind = reasons_map.get(f, "new_change")
-                      marker = "!" if "failure" in kind else "+"
-                      print(f"    {marker} {f}  [{kind}]")
-
-          # Build matrix JSON
-          matrix = json.dumps({"include": matrix_includes}) if matrix_includes else '{"include":[]}'
-          has_changes = "true" if matrix_includes else "false"
-
-          stacks_list = [e["stack"] for e in matrix_includes]
-          summary = ", ".join(stacks_list) if stacks_list else "none"
+          deploy_keys = [d['key'] for d in result.deploy_decisions if d['action'] == 'deploy']
+          summary = ", ".join(deploy_keys) if deploy_keys else "none"
 
           print(f"\n  Matrix: {matrix}")
           print(f"  Deploying: {summary}")
