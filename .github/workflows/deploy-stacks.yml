@@ -68,51 +68,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python - <<'PYEOF'
-          import os, subprocess
-
-          repo = os.environ["GITHUB_WORKSPACE"]
-          token = os.environ.get("GITHUB_TOKEN", "")
-
-          # Resolve SHAs
-          base = subprocess.run(
-              ["git", "rev-parse", "HEAD~1"], cwd=repo,
-              capture_output=True, text=True
-          ).stdout.strip()
-          if not base:
-              base = subprocess.run(
-                  ["git", "rev-list", "--max-parents=0", "HEAD"], cwd=repo,
-                  capture_output=True, text=True
-              ).stdout.strip().split("\n")[0]
-
-          head = subprocess.run(
-              ["git", "rev-parse", "HEAD"], cwd=repo,
-              capture_output=True, text=True, check=True
-          ).stdout.strip()
-
-          print(f"Base: {base[:12]}")
-          print(f"Head: {head[:12]}")
-
+          import os
           from lechange import ChangeDetector, Config
 
-          # Define YAML groups: one per stack folder
-          STACKS_YAML = """\
+          detector = ChangeDetector(os.environ["GITHUB_WORKSPACE"])
+          result = detector.get_changed_files(Config(
+              files=["stacks/**"],
+              files_yaml="""\
           dev:
             - "stacks/dev/**"
           staging:
             - "stacks/staging/**"
           prod:
             - "stacks/prod/**"
-          """
-
-          detector = ChangeDetector(repo)
-
-          # Detection with workflow failure tracking
-          config = Config(
-              base_sha=base,
-              sha=head,
-              files=["stacks/**"],
-              files_yaml=STACKS_YAML,
-              token=token,
+          """,
+              token=os.environ.get("GITHUB_TOKEN", ""),
               track_workflow_failures=True,
               failure_tracking_level="job",
               workflow_lookback_commits=5,
@@ -121,59 +91,36 @@ jobs:
               include_failed_files=True,
               skip_successful_files=True,
               workflow_name_filter="Deploy Stacks",
-          )
-          result = detector.get_changed_files(config)
+          ))
 
+          # All outputs computed by le-change core
+          matrix = result.deploy_matrix
+          has_changes = "true" if result.has_deployable_groups else "false"
+          deploy_keys = [d['key'] for d in result.deploy_decisions if d['action'] == 'deploy']
+          summary = ", ".join(deploy_keys) if deploy_keys else "none"
+
+          # Logging
           print(f"\n{'=' * 60}")
           print(f"  STACKS DEPLOYMENT ANALYSIS")
           print(f"{'=' * 60}")
           print(f"\n  All detected files: {list(result.all_changed_files)}")
-          print(f"  Changed stacks (YAML keys): {list(result.changed_keys)}")
           print(f"  Files to rebuild: {list(result.files_to_rebuild)}")
           print(f"  Files to skip: {list(result.files_to_skip)}")
-
-          if result.rebuild_reasons:
-              print(f"\n  Rebuild reasons:")
-              for r in result.rebuild_reasons:
-                  reason = r['kind']
-                  if r.get('failed_job_name'):
-                      reason += f" (job: {r['failed_job_name']})"
-                  print(f"    {r['file']}: {reason}")
-
-          # Deploy decisions computed by le-change core
           for d in result.deploy_decisions:
-              action = d['action'].upper()
-              reason = d.get('reason', '')
-              reason_tag = {
-                  'new_change': 'new change',
-                  'previous_failure': 'previous failure',
-                  'both_new_and_failed': 'new change + previous failure',
-              }.get(reason or '', '')
+              reason_tag = {'new_change': 'new change', 'previous_failure': 'previous failure',
+                  'both_new_and_failed': 'new change + previous failure'}.get(d.get('reason') or '', '')
               suffix = f" ({reason_tag})" if reason_tag else ""
-              print(f"\n  Stack [{d['key']}]: {action}{suffix}")
+              print(f"\n  Stack [{d['key']}]: {d['action'].upper()}{suffix}")
               for f in d['files']:
                   print(f"    + {f}")
-
-          # Matrix JSON and has_changes computed by le-change core
-          matrix = result.deploy_matrix
-          has_changes = "true" if result.has_deployable_groups else "false"
-
-          deploy_keys = [d['key'] for d in result.deploy_decisions if d['action'] == 'deploy']
-          summary = ", ".join(deploy_keys) if deploy_keys else "none"
-
           print(f"\n  Matrix: {matrix}")
           print(f"  Deploying: {summary}")
           print(f"{'=' * 60}")
-
-          # Diagnostics
           for d in result.diagnostics:
               print(f"  [{d['severity']}] {d['category']}: {d['message']}")
 
-          gh = os.environ["GITHUB_OUTPUT"]
-          with open(gh, "a") as f:
-              f.write(f"matrix={matrix}\n")
-              f.write(f"has_changes={has_changes}\n")
-              f.write(f"stacks_summary={summary}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={matrix}\nhas_changes={has_changes}\nstacks_summary={summary}\n")
           PYEOF
 
   # ═══════════════════════════════════════════════════════════════════
