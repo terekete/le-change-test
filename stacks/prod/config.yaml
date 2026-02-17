@@ -30,5 +30,5 @@ networking:
 
 monitoring:
   log_level: warn
-  metrics_interval: 60
+  metrics_interval: 61
   alerts_enabled: true
