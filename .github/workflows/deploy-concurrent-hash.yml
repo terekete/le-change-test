@@ -81,7 +81,7 @@ jobs:
               failure_tracking_level="job",
               workflow_lookback_commits=5,
               wait_for_active_workflows=True,
-              workflow_max_wait_seconds=180,
+              workflow_max_wait_seconds=600,
               include_failed_files=True,
               skip_successful_files=True,
               workflow_name_filter="Deploy Concurrent Hash",
