@@ -1,0 +1,35 @@
+vpc:
+  cidr: "10.0.0.0/16"
+  name: dev-vpc
+  enable_dns_hostnames: true
+  enable_dns_support: true
+
+subnets:
+  public:
+    - cidr: "10.0.1.0/24"
+      az: us-east-1a
+    - cidr: "10.0.2.0/24"
+      az: us-east-1b
+  private:
+    - cidr: "10.0.10.0/24"
+      az: us-east-1a
+    - cidr: "10.0.11.0/24"
+      az: us-east-1b
+
+nat_gateway:
+  enabled: true
+  count: 1
+
+security_groups:
+  app:
+    ingress:
+      - port: 443
+        protocol: tcp
+        cidr: "0.0.0.0/0"
+      - port: 80
+        protocol: tcp
+        cidr: "0.0.0.0/0"
+    egress:
+      - port: 0
+        protocol: "-1"
+        cidr: "0.0.0.0/0"

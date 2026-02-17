@@ -1,0 +1,207 @@
+name: Deploy Concurrent
+
+on:
+  push:
+    branches: [main, "feature/**", "test/**"]
+    paths:
+      - "stacks/**"
+      - ".github/workflows/deploy-concurrent.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  LECHANGE_REPO: "https://github.com/lituus-io/le-change.git"
+  LECHANGE_REF: "feat/workflow-failure-tracking"
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # JOB 1: Detect changed stacks using files_group_by (path key mode)
+  # ═══════════════════════════════════════════════════════════════════
+  detect-stacks:
+    name: "Detect Changed Stacks (Concurrent)"
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
+      deploy_matrix: ${{ steps.detect.outputs.deploy_matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            /tmp/le-change/target
+          key: lechange-${{ runner.os }}-${{ hashFiles('/tmp/le-change/Cargo.lock') }}
+          restore-keys: lechange-${{ runner.os }}-
+
+      - name: Build & install lechange
+        run: |
+          pip install maturin
+          if [ -d /tmp/le-change/.git ]; then
+            cd /tmp/le-change && git fetch origin ${{ env.LECHANGE_REF }} && git checkout FETCH_HEAD
+          else
+            rm -rf /tmp/le-change
+            git clone --depth 1 --branch ${{ env.LECHANGE_REF }} ${{ env.LECHANGE_REPO }} /tmp/le-change
+          fi
+          cd /tmp/le-change
+          maturin build --release --out dist
+          pip install dist/*.whl
+
+      - name: Detect changed stacks
+        id: detect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PYEOF'
+          import json, os
+          from lechange import ChangeDetector, Config
+
+          detector = ChangeDetector(os.environ["GITHUB_WORKSPACE"])
+          result = detector.get_changed_files(Config(
+              files=["stacks/**"],
+              files_group_by="stacks/{group}/**",
+              files_group_by_key="path",
+              token=os.environ.get("GITHUB_TOKEN", ""),
+              track_workflow_failures=True,
+              failure_tracking_level="job",
+              workflow_lookback_commits=5,
+              wait_for_active_workflows=True,
+              workflow_max_wait_seconds=180,
+              include_failed_files=True,
+              skip_successful_files=True,
+              workflow_name_filter="Deploy Concurrent",
+              deploy_matrix_include_reason=True,
+              deploy_matrix_include_concurrency=True,
+          ))
+
+          matrix = result.deploy_matrix
+          has_changes = "true" if result.has_deployable_groups else "false"
+          deploy_keys = [d['key'] for d in result.deploy_decisions if d['action'] == 'deploy']
+          summary = ", ".join(deploy_keys) if deploy_keys else "none"
+
+          print(f"\n{'=' * 60}")
+          print(f"  CONCURRENT STACKS DEPLOYMENT ANALYSIS")
+          print(f"{'=' * 60}")
+          print(f"\n  All detected files: {list(result.all_changed_files)}")
+          for d in result.deploy_decisions:
+              blocked = d.get('concurrency_blocked', False)
+              blocked_by = d.get('concurrency_blocked_by', 0)
+              reason = d.get('reason', 'none')
+              print(f"\n  Stack [{d['key']}]: {d['action'].upper()}")
+              print(f"    reason: {reason}")
+              print(f"    concurrency_blocked: {blocked}")
+              print(f"    concurrency_blocked_by: {blocked_by}")
+              for f in d['files']:
+                  print(f"    + {f}")
+          print(f"\n  Matrix: {matrix}")
+          print(f"  Deploying: {summary}")
+          print(f"{'=' * 60}")
+          for d in result.diagnostics:
+              print(f"  [{d['severity']}] {d['category']}: {d['message']}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={matrix}\nhas_changes={has_changes}\ndeploy_matrix={matrix}\n")
+          PYEOF
+
+      - name: Validate matrix
+        run: |
+          echo '${{ steps.detect.outputs.deploy_matrix }}' | python3 -c "
+          import json, sys
+          raw = sys.stdin.read().strip()
+          if not raw:
+              print('No matrix output (no changes detected)')
+              sys.exit(0)
+          m = json.loads(raw)
+          for entry in m.get('include', []):
+              assert 'stack' in entry, f'Missing stack in {entry}'
+              assert 'files' in entry, f'Missing files in {entry}'
+              assert 'count' in entry, f'Missing count in {entry}'
+              assert 'action' in entry, f'Missing action in {entry}'
+              assert 'reason' in entry, f'Missing reason in {entry}'
+              assert 'concurrency_blocked' in entry, f'Missing concurrency_blocked in {entry}'
+              assert 'concurrency_blocked_by' in entry, f'Missing concurrency_blocked_by in {entry}'
+          print(f'Matrix validation passed ({len(m.get(\"include\", []))} entries)')
+          "
+
+  # ═══════════════════════════════════════════════════════════════════
+  # JOB 2: Deploy each changed stack (matrix job)
+  # ═══════════════════════════════════════════════════════════════════
+  deploy-stack:
+    name: "Deploy [${{ matrix.stack }}]"
+    needs: detect-stacks
+    if: needs.detect-stacks.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-stacks.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Deploy ${{ matrix.stack }}"
+        run: |
+          echo "========================================================"
+          echo "  Deploying stack: ${{ matrix.stack }}"
+          echo "  Changed files (${{ matrix.count }}):"
+          for f in ${{ matrix.files }}; do
+            echo "    - $f"
+          done
+          echo "========================================================"
+
+          # Simulate deployment phases
+          echo "  [1/4] Loading config..."
+          sleep 20
+
+          echo "  [2/4] Planning infrastructure changes..."
+          sleep 20
+
+          echo "  [3/4] Applying changes..."
+          sleep 20
+
+          echo "  [4/4] Verifying deployment health..."
+          sleep 20
+
+          echo ""
+          echo "  Stack ${{ matrix.stack }} deployed successfully!"
+          echo "========================================================"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # JOB 3: Summary
+  # ═══════════════════════════════════════════════════════════════════
+  summary:
+    name: "Deployment Summary"
+    needs: [detect-stacks, deploy-stack]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        run: |
+          echo "==================================================="
+          echo "  Deploy Concurrent - Summary"
+          echo "==================================================="
+          echo ""
+          echo "  Detection:  ${{ needs.detect-stacks.result }}"
+          echo "  Deployment: ${{ needs.deploy-stack.result }}"
+          echo ""
+          if [ "${{ needs.deploy-stack.result }}" = "success" ]; then
+            echo "  Result: ALL STACKS DEPLOYED SUCCESSFULLY"
+          elif [ "${{ needs.deploy-stack.result }}" = "skipped" ]; then
+            echo "  Result: NO STACKS NEEDED DEPLOYMENT"
+          else
+            echo "  Result: DEPLOYMENT FAILED"
+          fi
+          echo "==================================================="
