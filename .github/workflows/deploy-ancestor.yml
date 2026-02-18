@@ -1,0 +1,242 @@
+name: Deploy Ancestor Recovery
+
+on:
+  push:
+    branches: [main, "feature/**", "test/**"]
+    paths:
+      - "stacks/**"
+      - ".github/workflows/deploy-ancestor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  LECHANGE_REPO: "https://github.com/lituus-io/le-change.git"
+  LECHANGE_REF: "feat/workflow-failure-tracking"
+
+jobs:
+  # =================================================================
+  # JOB 1: Detect changes with ancestor directory recovery
+  #
+  # Tests files_ancestor_lookup_depth: non-YAML files (e.g. .sql
+  # migrations) in stacks/prod/migrations/ should be recovered
+  # because stacks/prod/ contains *.yaml files that match the pattern.
+  # =================================================================
+  detect-with-ancestor:
+    name: "Detect (ancestor depth=2)"
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
+      recovered_count: ${{ steps.detect.outputs.recovered_count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            /tmp/le-change/target
+          key: lechange-${{ runner.os }}-${{ hashFiles('/tmp/le-change/Cargo.lock') }}
+          restore-keys: lechange-${{ runner.os }}-
+
+      - name: Build & install lechange
+        run: |
+          pip install maturin
+          if [ -d /tmp/le-change/.git ]; then
+            cd /tmp/le-change && git fetch origin ${{ env.LECHANGE_REF }} && git checkout FETCH_HEAD
+          else
+            rm -rf /tmp/le-change
+            git clone --depth 1 --branch ${{ env.LECHANGE_REF }} ${{ env.LECHANGE_REPO }} /tmp/le-change
+          fi
+          cd /tmp/le-change
+          maturin build --release --out dist
+          pip install dist/*.whl
+
+      - name: Detect with ancestor recovery
+        id: detect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PYEOF'
+          import json, os
+          from lechange import ChangeDetector, Config
+
+          detector = ChangeDetector(os.environ["GITHUB_WORKSPACE"])
+
+          # Pattern only matches *.yaml — .sql files in migrations/ would normally
+          # be unmatched. With files_ancestor_lookup_depth=2, they get recovered
+          # because stacks/prod/ (parent dir) contains *.yaml files.
+          result = detector.get_changed_files(Config(
+              files=["stacks/**/*.yaml"],
+              files_group_by="stacks/{group}/**",
+              files_group_by_key="name",
+              files_ancestor_lookup_depth=2,
+              token=os.environ.get("GITHUB_TOKEN", ""),
+              deploy_matrix_include_reason=True,
+          ))
+
+          matrix = result.deploy_matrix
+          has_changes = "true" if result.has_deployable_groups else "false"
+          deploy_keys = [d['key'] for d in result.deploy_decisions if d['action'] == 'deploy']
+          summary = ", ".join(deploy_keys) if deploy_keys else "none"
+
+          # Count ancestor recovery diagnostics
+          recovered_count = 0
+          for d in result.diagnostics:
+              if d['category'] == 'ancestor_recovery' and 'Recovered' in d['message']:
+                  # Extract count from "Recovered N file(s)..."
+                  parts = d['message'].split()
+                  for i, p in enumerate(parts):
+                      if p == 'Recovered' and i + 1 < len(parts):
+                          try:
+                              recovered_count = int(parts[i + 1])
+                          except ValueError:
+                              pass
+
+          print(f"\n{'=' * 60}")
+          print(f"  ANCESTOR RECOVERY TEST")
+          print(f"{'=' * 60}")
+          print(f"\n  All detected files: {list(result.all_changed_files)}")
+          print(f"  Files to rebuild:   {list(result.files_to_rebuild)}")
+          print(f"  Recovered count:    {recovered_count}")
+          for d in result.deploy_decisions:
+              reason = d.get('reason', 'none')
+              print(f"\n  Stack [{d['key']}]: {d['action'].upper()} (reason: {reason})")
+              for f in d['files']:
+                  print(f"    + {f}")
+          print(f"\n  Matrix: {matrix}")
+          print(f"  Deploying: {summary}")
+          print(f"{'=' * 60}")
+          print(f"\n  Diagnostics:")
+          for d in result.diagnostics:
+              print(f"    [{d['severity']}] {d['category']}: {d['message']}")
+          print(f"{'=' * 60}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={matrix}\n")
+              f.write(f"has_changes={has_changes}\n")
+              f.write(f"recovered_count={recovered_count}\n")
+          PYEOF
+
+  # =================================================================
+  # JOB 2: Detect WITHOUT ancestor recovery (control group)
+  # =================================================================
+  detect-without-ancestor:
+    name: "Detect (no ancestor, depth=0)"
+    runs-on: ubuntu-latest
+    outputs:
+      file_count: ${{ steps.detect.outputs.file_count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            /tmp/le-change/target
+          key: lechange-${{ runner.os }}-${{ hashFiles('/tmp/le-change/Cargo.lock') }}
+          restore-keys: lechange-${{ runner.os }}-
+
+      - name: Build & install lechange
+        run: |
+          pip install maturin
+          if [ -d /tmp/le-change/.git ]; then
+            cd /tmp/le-change && git fetch origin ${{ env.LECHANGE_REF }} && git checkout FETCH_HEAD
+          else
+            rm -rf /tmp/le-change
+            git clone --depth 1 --branch ${{ env.LECHANGE_REF }} ${{ env.LECHANGE_REPO }} /tmp/le-change
+          fi
+          cd /tmp/le-change
+          maturin build --release --out dist
+          pip install dist/*.whl
+
+      - name: Detect without ancestor recovery
+        id: detect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PYEOF'
+          import os
+          from lechange import ChangeDetector, Config
+
+          detector = ChangeDetector(os.environ["GITHUB_WORKSPACE"])
+
+          # Same config but WITHOUT ancestor recovery (depth=0, default)
+          result = detector.get_changed_files(Config(
+              files=["stacks/**/*.yaml"],
+              files_group_by="stacks/{group}/**",
+              files_group_by_key="name",
+              # files_ancestor_lookup_depth defaults to 0 (disabled)
+              token=os.environ.get("GITHUB_TOKEN", ""),
+          ))
+
+          file_count = len(list(result.all_changed_files))
+          print(f"\n  Without ancestor recovery:")
+          print(f"  Detected {file_count} file(s): {list(result.all_changed_files)}")
+          print(f"  (No .sql migrations should appear here)")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"file_count={file_count}\n")
+          PYEOF
+
+  # =================================================================
+  # JOB 3: Compare results
+  # =================================================================
+  compare:
+    name: "Compare Results"
+    needs: [detect-with-ancestor, detect-without-ancestor]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate ancestor recovery
+        run: |
+          echo "========================================================"
+          echo "  Ancestor Recovery Comparison"
+          echo "========================================================"
+          echo ""
+          echo "  With ancestor (depth=2):"
+          echo "    has_changes:    ${{ needs.detect-with-ancestor.outputs.has_changes }}"
+          echo "    recovered_count: ${{ needs.detect-with-ancestor.outputs.recovered_count }}"
+          echo ""
+          echo "  Without ancestor (depth=0):"
+          echo "    file_count:     ${{ needs.detect-without-ancestor.outputs.file_count }}"
+          echo ""
+
+          # If .sql files were changed, the ancestor version should detect more
+          RECOVERED="${{ needs.detect-with-ancestor.outputs.recovered_count }}"
+          echo "  Recovered files: ${RECOVERED:-0}"
+
+          if [ "${{ needs.detect-with-ancestor.result }}" = "success" ] && \
+             [ "${{ needs.detect-without-ancestor.result }}" = "success" ]; then
+            echo ""
+            echo "  Result: BOTH DETECTIONS COMPLETED SUCCESSFULLY"
+          else
+            echo ""
+            echo "  Result: ONE OR MORE DETECTIONS FAILED"
+          fi
+          echo "========================================================"
