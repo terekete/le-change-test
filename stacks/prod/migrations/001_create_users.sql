@@ -5,3 +5,4 @@ CREATE TABLE users (
     name VARCHAR(255) NOT NULL,
     created_at TIMESTAMP DEFAULT NOW()
 );
+-- Test migration Wed 18 Feb 2026 12:45:40 EST
